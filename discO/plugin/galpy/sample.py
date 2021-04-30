@@ -4,6 +4,7 @@
 
 __all__ = [
     "GalpyPotentialSampler",
+    "MeshGridPositionDF",
 ]
 
 
@@ -17,10 +18,12 @@ import typing as T
 import astropy.coordinates as coord
 import galpy.df as gdf
 import numpy as np
+from galpy.df.df import df as DF
 
 # PROJECT-SPECIFIC
 import discO.type_hints as TH
-from discO.core.sample import PotentialSampler
+from .wrapper import GalpyPotentialWrapper
+from discO.core.sample import MeshGridPotentialSampler, PotentialSampler
 from discO.core.wrapper import PotentialWrapper
 from discO.utils.random import RandomLike
 
@@ -87,7 +90,10 @@ class GalpyPotentialSampler(PotentialSampler, key="galpy"):
 
         # make sure physical is on
         self._potential.turn_physical_on()
-        self._df._pot.turn_physical_on()
+        if isinstance(self._df._pot, PotentialWrapper):
+            self._df._pot.wrapped.turn_physical_on()
+        else:
+            self._df._pot.turn_physical_on()
 
     # /def
 
@@ -128,9 +134,20 @@ class GalpyPotentialSampler(PotentialSampler, key="galpy"):
 
         # can't pass a random seed, set in context
         with self._random_context(random):
-            orbits = self._df.sample(
-                R=None, z=None, phi=None, n=n, return_orbit=True,
+            orbits = self._df.sample(n=n, return_orbit=True)
+
+        if isinstance(orbits, coord.BaseRepresentation):
+            orbits = frame.realize_frame(
+                orbits,
+                representation_type=representation_type,
             )
+        if isinstance(orbits, coord.BaseCoordinateFrame):
+            orbits = coord.SkyCoord(
+                orbits,
+                copy=False,
+            )
+        if isinstance(orbits, coord.SkyCoord):
+            return orbits
 
         t = orbits.time()
         dif = coord.CartesianDifferential(
@@ -158,6 +175,55 @@ class GalpyPotentialSampler(PotentialSampler, key="galpy"):
         samples.mass = np.ones(n) * self._total_mass / n  # AGAMA compatibility
 
         return samples
+
+    # /def
+
+
+# /class
+
+
+##############################################################################
+
+
+class MeshGridPositionDF(DF):
+    """Mesh-Grid Position Distribution.
+
+    Parameters
+    ----------
+    pot : PotentialWrapper
+    meshgrid : coord-like
+
+    """
+
+    def __init__(self, pot, meshgrid):
+        self._sampler = MeshGridPotentialSampler(
+            GalpyPotentialWrapper(pot),
+            meshgrid,  # TODO! how get
+        )
+
+    # /def
+
+    @property
+    def _pot(self):
+        return self._sampler._wrapper_potential
+
+    def sample(
+        self, n: int, rng: T.Optional[np.random.Generator] = None, **kw
+    ):
+        """Sample.
+
+        .. todo::
+
+            handle uneven voxels
+
+        Parameters
+        ----------
+        n : int
+            number of sample points
+        rng : `~numpy.random.Generator` or None
+
+        """
+        return self._sampler(n, rng=rng, **kw)
 
     # /def
 
